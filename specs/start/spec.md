@@ -6,32 +6,31 @@
 | **Status** | Draft |
 | **Branch** | `feature/taskadmin-technical-spec` |
 | **Source** | `specs/start/taskadmin.feature` (Gherkin behavior spec) |
-| **Version** | 1.0 — 2026-10-19 |
+| **Version** | 2.0 — 2026-10-19 |
 
 ---
 
 ## 1. Overview
 
 ### 1.1 Purpose
-This document defines the technical design for the **Task Management CRUD** application: a web application that lets authenticated users create, view, update, and delete tasks. It translates the behavioral requirements in `taskadmin.feature` into a concrete architecture, data model, API contract, validation rules, and UI specification.
+This document defines the technical design for the **Task Management CRUD** application: a simple, fully client-side web app for creating, viewing, updating, and deleting tasks. It translates the behavioral requirements in `taskadmin.feature` into a concrete architecture, data model, storage design, and UI specification.
 
 ### 1.2 Scope
-In scope: authentication prerequisite, task list ("My Tasks" dashboard), task detail page, task create/edit form, status filtering, delete confirmation flow, and all validation/error paths covered by the feature file.
+In scope: task list ("My Tasks" dashboard), task detail view, task create/edit form, status filtering, delete confirmation flow, and all validation/error paths covered by the feature file.
 
-Out of scope (future work): task assignment/sharing, subtasks, attachments, comments, notifications, recurring tasks, offline mode.
+Out of scope: backend/API, database, multi-user accounts, synchronization, task sharing, attachments, notifications.
 
 ### 1.3 Reference stack
-The environment supports **Node.js v24.18.1** and **npm 11.12.1** (see `agents.md`); the default reference stack is:
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Runtime | Node.js 24 | LTS-line, available in dev environment |
-| API | Express 5 (REST, JSON) | Stateless, session/JWT auth |
-| Persistence | SQLite (via `better-sqlite3`) | Zero-config; swap for PostgreSQL in production |
-| Frontend | Single-page app (vanilla or lightweight framework) | Talks to the REST API only |
-| Testing | Vitest + Supertest (API), Playwright (E2E/Gherkin runner) | Gherkin steps mapped 1:1 to step definitions |
+| Markup | Plain **HTML5** | Static files; opens directly in the browser or via any static server |
+| Styling | Plain **CSS3** | No framework; one stylesheet + CSS variables for theming |
+| Logic | **Vanilla JavaScript** (ES modules) | No build step, no dependencies, no framework |
+| Persistence | **`localStorage`** | Browser-local storage; JSON-serialized data |
+| Server / API | **None** | All logic runs in the browser |
 
-The API contract in §5 is stack-agnostic and remains valid if the persistence layer or framework changes.
+Everything works by opening `index.html` in a browser. A static file server (e.g. `npx serve`) is optional for development only.
 
 ---
 
@@ -40,265 +39,215 @@ The API contract in §5 is stack-agnostic and remains valid if the persistence l
 ### 2.1 High-level
 
 ```
-┌────────────┐   HTTPS/JSON   ┌─────────────┐   SQL   ┌──────────┐
-│  Web Client │ ─────────────▶ │  API Server  │ ──────▶ │ Database │
-│ (SPA / UI)  │ ◀───────────── │ (Express 5)  │ ◀────── │ (SQLite) │
-└────────────┘   2xx/4xx/5xx  └─────────────┘         └──────────┘
-                                       │
-                                       ▼
-                              ┌─────────────────┐
-                              │ Auth Middleware   │
-                              │ (JWT / session)  │
-                              └─────────────────┘
+┌────────────────────────────────────────────────┐
+│                    Browser                      │
+│                                                 │
+│  index.html ──▶ app.js (controller)             │
+│       │             │                           │
+│       │        ┌────┴─────────────────┐         │
+│       │        ▼                      ▼         │
+│       │   storage.js             views.js       │
+│       │   (localStorage I/O)     (render/DOM)   │
+│       │        │                      │         │
+│       │        ▼                      ▼         │
+│       │   model.js (validation, ids, helpers)   │
+│       │                                          │
+│       └──▶ styles.css                            │
+└────────────────────────────────────────────────┘
+                       │
+                       ▼
+            localStorage (per-origin)
+            key: "tasks" → JSON array
 ```
 
-### 2.2 Request lifecycle
-1. Client sends request with `Authorization: Bearer <token>`.
-2. **Auth middleware** validates the token; on failure → `401`.
-3. **Route handler** parses and validates input (§4); on failure → `400`/`422`.
-4. **Service layer** executes the business operation in a single DB transaction.
-5. Resource not found (wrong id **or not owned by the caller**) → `404`.
-6. Success → `200`/`201` with the updated resource representation; a success flash message is shown by the client (§6.3).
+### 2.2 Files
 
-### 2.3 Layering
 ```
-routes/  → controllers/  → services/  → repositories/ (SQL)
-                ↑
-          validators/  middleware/
+/
+├── index.html          # Single page: list, detail, and form views
+├── styles.css          # All styling
+└── js/
+    ├── app.js          # Entry point: state, routing, event wiring
+    ├── model.js        # Task factory, validation, enum labels, helpers
+    ├── storage.js      # load/save/delete via localStorage
+    └── views.js        # DOM rendering for list, detail, form, messages
 ```
-Business rules (validation, ownership, status timestamps) live in the **service layer** so they are enforced identically for UI and API clients.
+
+### 2.3 Data flow
+1. On load, `app.js` reads all tasks from `storage.js` and renders the list.
+2. User actions (click, submit) dispatch to a controller function in `app.js`.
+3. The controller calls `model.js` for validation; on failure, the view shows an inline error and **no storage write occurs**.
+4. On success, `storage.js` persists the change, then the list re-renders.
+5. A success message (toast/flash) is displayed with the exact wording from the feature file.
+
+> **SPA "routing"** = switching which section of `index.html` is visible (list / detail / form). Query-string or hash routing (`#/tasks/:id`) is optional; state can also be held in a JS variable with the previous view kept in memory for "back" behavior.
 
 ---
 
-## 3. Data Model
+## 3. Data Model & Persistence
 
 ### 3.1 Entity: `Task`
 
-| Column | Type | Constraints | Description |
-|---|---|---|---|
-| `id` | INTEGER | PK, autoincrement | Server-generated identifier (feature file uses `"9999"` as a non-existent id) |
-| `title` | VARCHAR(200) | NOT NULL | Required; trimmed before save |
-| `description` | TEXT | NULL allowed, default `NULL` | Optional; empty string normalized to `NULL` |
-| `status` | ENUM | NOT NULL, default `TODO` | `TODO` \| `IN_PROGRESS` \| `DONE` (labels: "To Do", "In Progress", "Done") |
-| `priority` | ENUM | NOT NULL, default `MEDIUM` | `LOW` \| `MEDIUM` \| `HIGH` (labels: "Low", "Medium", "High") |
-| `due_date` | DATE | NULL allowed | ISO-8601 (`YYYY-MM-DD`) |
-| `owner_id` | INTEGER | NOT NULL, FK → `users.id`, indexed | Enforces per-user isolation |
-| `completed_at` | TIMESTAMP | NULL allowed | Set when status first becomes `DONE`; cleared if status reverts |
-| `created_at` | TIMESTAMP | NOT NULL, default `CURRENT_TIMESTAMP` | Used for list ordering (newest first) |
-| `updated_at` | TIMESTAMP | NOT NULL, auto-updated | Maintained by ORM/trigger |
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `id` | string | auto | generated | Unique id — `crypto.randomUUID()` (or `"t" + Date.now() + random`) |
+| `title` | string | **yes** | — | Non-empty after trimming; max 200 chars |
+| `description` | string | no | `""` | Free text; empty string allowed |
+| `status` | enum | no | `"To Do"` | `"To Do"` \| `"In Progress"` \| `"Done"` |
+| `priority` | enum | no | `"Medium"` | `"Low"` \| `"Medium"` \| `"High"` |
+| `dueDate` | string | no | `""` | ISO date `YYYY-MM-DD`; empty if unset |
+| `completedAt` | string \| null | auto | `null` | ISO timestamp; set when status becomes `"Done"` |
+| `createdAt` | string | auto | now (ISO) | Used for list ordering (newest first) |
+| `updatedAt` | string | auto | now (ISO) | Refreshed on every edit |
 
-**Indexes:** `(owner_id, status)`, `(owner_id, created_at DESC)`.
+Enum values are stored as **display labels** directly (the same strings the feature file asserts), so no mapping layer is needed.
 
-### 3.2 Entity: `User` (auth prerequisite only)
+### 3.2 `localStorage` layout
 
-| Column | Type | Constraints |
-|---|---|---|
-| `id` | INTEGER | PK, autoincrement |
-| `email` | VARCHAR(255) | NOT NULL, UNIQUE |
-| `password_hash` | VARCHAR(255) | NOT NULL (argon2/bcrypt) |
-| `created_at` | TIMESTAMP | NOT NULL, default `CURRENT_TIMESTAMP` |
-
-### 3.3 State machine — `status`
-
-```
-        ┌──────────┐   update    ┌───────────────┐   update    ┌──────┐
-        │  TO DO   │ ──────────▶ │ IN_PROGRESS   │ ──────────▶ │ DONE │
-        │(To Do)   │ ◀────────── │(In Progress)  │ ◀────────── │(Done)│
-        └──────────┘   update    └───────────────┘   update    └──────┘
-```
-- All three transitions are legal in any direction (the feature file exercises only `IN_PROGRESS → DONE`, but no rule forbids re-opening).
-- **Side effect on entering `DONE`:** set `completed_at = NOW()`.
-- **Side effect on leaving `DONE`:** set `completed_at = NULL`.
-
-### 3.4 Enum ↔ display label mapping
-
-| Internal | UI label |
+| Key | Value |
 |---|---|
-| `TODO` | "To Do" |
-| `IN_PROGRESS` | "In Progress" |
-| `DONE` | "Done" |
-| `LOW` | "Low" |
-| `MEDIUM` | "Medium" |
-| `HIGH` | "High" |
+| `tasks` | `JSON.stringify(Task[])` |
+| `tasks.nextId` *(optional)* | counter, only if sequential ids are preferred over UUIDs |
+
+Rules:
+- Reads/writes happen **only** through `storage.js` (`loadTasks`, `saveTasks`, `getTask`, `addTask`, `updateTask`, `deleteTask`).
+- Every mutation re-serializes the full array and writes it in one `setItem` call — effectively an all-or-nothing save.
+- Storage errors are caught: `QuotaExceededError` → message *"Storage is full — the task could not be saved."*; disabled storage (private mode) → warn on startup and keep data in memory for the session.
+
+### 3.3 Status "state machine"
+
+```
+   ┌──────────┐   update   ┌───────────────┐   update   ┌──────────┐
+   │  To Do   │ ─────────▶ │ In Progress   │ ─────────▶ │   Done   │
+   │          │ ◀───────── │               │ ◀───────── │          │
+   └──────────┘   update   └───────────────┘   update   └──────────┘
+```
+- All transitions are legal in any direction.
+- Entering `"Done"` → set `completedAt = new Date().toISOString()`.
+- Leaving `"Done"` → reset `completedAt = null`.
+
+### 3.4 Seed / demo data (optional)
+On first run (no `tasks` key), `app.js` may seed the three tasks from the feature file's data table ("Book dentist", "Prepare Q3 report", "Water the plants") for demo purposes. A "Clear all data" helper resets the store.
 
 ---
 
 ## 4. Validation Rules
 
-Validation runs both client-side (immediate feedback) and server-side (authoritative). Server rules take precedence.
+Validation lives in `model.js` and runs on form submit (client-side only — there is no server). Messages are the exact strings asserted in the feature file.
 
 | # | Field | Rule | Error message (exact string) | Feature scenario |
 |---|---|---|---|---|
-| V1 | `title` | Required; must be non-empty **after trimming** | `Title is required` | Create w/o title rejected; Update w/ empty title rejected |
-| V2 | `title` | Max length 200 chars | `Title must be 200 characters or fewer` | (defensive) |
-| V3 | `description` | Optional; max 5,000 chars | `Description must be 5000 characters or fewer` | Create w/ only title |
-| V4 | `status` | Must be a valid enum value | `Invalid status value` | Filter, status change |
-| V5 | `priority` | Must be a valid enum value | `Invalid priority value` | Create/update forms |
-| V6 | `due_date` | Optional; valid ISO date, not in the past on create | `Due date must be a valid date` / `Due date cannot be in the past` | Create w/ due date |
-| V7 | `id` (path) | Must exist **and** belong to the authenticated user; otherwise indistinguishable `404` | `Task not found` | All `@notfound` scenarios |
+| V1 | `title` | Required; non-empty **after trimming** | `Title is required` | Create/update with empty title rejected |
+| V2 | `title` | ≤ 200 chars | `Title must be 200 characters or fewer` | (defensive) |
+| V3 | `description` | ≤ 5,000 chars | `Description must be 5000 characters or fewer` | (defensive) |
+| V4 | `status` | One of the three labels | `Invalid status value` | Filter, status change |
+| V5 | `priority` | One of the three labels | `Invalid priority value` | Create/update forms |
+| V6 | `dueDate` | Empty or a valid ISO date; not before today on create | `Due date must be a valid date` / `Due date cannot be in the past` | Create w/ due date |
+| V7 | `id` | Must exist in the store | `Task not found` | All `@notfound` scenarios |
 
 **Key invariants (from the feature file):**
-- A rejected create/update performs **no write** — the store state is unchanged (transaction rollback).
-- A rejected update leaves **all original field values intact**, not just `title`.
-- Duplicate task titles are **allowed** (no uniqueness constraint); precondition "user has no task named X" is test setup, not a business rule.
-- 404 responses must not reveal whether a task id exists for another user (no `403` on foreign tasks).
+- A rejected create/update performs **no write** — the stored array is unchanged and the original title (and all fields) remain intact.
+- A "Task not found" state is shown whenever a requested id doesn't exist (e.g. stale hash URL like `#/tasks/9999`).
+- Duplicate titles are **allowed** (preconditions like "user has no task named X" are test setup, not business rules).
 
 ---
 
-## 5. API Specification
+## 5. CRUD Operations (module contracts)
 
-Base path: `/api/v1`. All endpoints require `Authorization: Bearer <token>` unless noted. All request/response bodies are `application/json`.
+No API — each operation is a JS function. Signatures below are the contract between modules.
 
-### 5.1 Endpoint summary
-
-| Method | Path | Purpose | Success | Feature tags |
-|---|---|---|---|---|
-| `POST` | `/tasks` | Create a task | `201` | `@create` |
-| `GET` | `/tasks` | List tasks (newest first, optional filter) | `200` | `@view`, `@filter` |
-| `GET` | `/tasks/:id` | Fetch one task | `200` | `@view`, `@notfound` |
-| `PATCH` | `/tasks/:id` | Partial update (title, description, status, priority, due_date) | `200` | `@update`, `@notfound` |
-| `DELETE` | `/tasks/:id` | Delete a task | `204` (no body) | `@delete`, `@notfound` |
-
-> UI-level delete confirmation is a client concern (§6.4); the API itself performs an unconditional delete once called.
-
-### 5.2 `POST /api/v1/tasks`
-
-Request:
-```json
-{
-  "title": "Book dentist appointment",
-  "description": "Call the clinic to schedule a checkup",
-  "due_date": "2026-10-30",
-  "priority": "HIGH",
-  "status": "TODO"
-}
+### 5.1 Create — `addTask(data) → Task`
+```js
+const task = addTask({
+  title: "Book dentist appointment",
+  description: "Call the clinic to schedule a checkup",
+  dueDate: "2026-10-30",
+  priority: "High"          // default "Medium"
+});
 ```
-- `title`: **required** (V1). `description`, `due_date`, `priority`, `status`: optional; defaults `NULL` / `NULL` / `MEDIUM` / `TODO`.
+- Validates (V1–V6); throws `ValidationError("Title is required")` if invalid.
+- Assigns `id`, `status: "To Do"`, `completedAt: null`, `createdAt`/`updatedAt` = now.
+- Prepends to the array, persists, returns the new task.
+- UI then shows: **Task created successfully**.
 
-Response `201 Created`:
-```json
-{
-  "id": 42,
-  "title": "Book dentist appointment",
-  "description": "Call the clinic to schedule a checkup",
-  "status": "TODO",
-  "priority": "HIGH",
-  "due_date": "2026-10-30",
-  "completed_at": null,
-  "created_at": "2026-10-19T10:55:00Z",
-  "updated_at": "2026-10-19T10:55:00Z"
-}
+### 5.2 Read — list & detail
+```js
+const tasks = loadTasks();                       // list, stored order = newest first
+const visible = filterByStatus(tasks, "Done");   // status filter
+const task   = getTask(id);                      // → Task | undefined → "Task not found"
 ```
+- **List order:** newest first. Because `addTask` prepends, order is insertion-independent of storage; the list sorts by `createdAt` descending as a safety net.
+- **Filter:** a `<select>` with `All` / `To Do` / `In Progress` / `Done`; choosing a value re-renders showing only matching tasks.
 
-Error (V1):
-```json
-{ "error": { "code": "VALIDATION_ERROR", "message": "Title is required", "fields": { "title": "Title is required" } } }
+### 5.3 Update — `updateTask(id, changes) → Task`
+```js
+const task = updateTask(id, { title: "Buy groceries and cook dinner",
+                              description: "Milk, eggs, pasta, and tomatoes" });
+updateTask(id, { status: "Done" });   // also sets completedAt
 ```
-Status: `422 Unprocessable Entity`.
+- Validates the **merged** result; on failure nothing is written and the original values persist.
+- Applies `completedAt` side effects per §3.3; refreshes `updatedAt`.
+- Task not found → throws `NotFoundError("Task not found")`.
+- UI then shows: **Task updated successfully**.
 
-### 5.3 `GET /api/v1/tasks`
-
-Query parameters:
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `status` | enum | — | `TODO` \| `IN_PROGRESS` \| `DONE` — filters the list (feature: filter by "Done") |
-| `priority` | enum | — | Optional secondary filter |
-| `page`, `limit` | int | `1`, `50` | Pagination; `limit` max 100 |
-
-Ordering: `created_at DESC` (**most recently created first** — asserted by the list scenario).
-
-Response `200`:
-```json
-{ "data": [ /* Task[] */ ], "meta": { "total": 3, "page": 1, "limit": 50 } }
+### 5.4 Delete — `deleteTask(id) → boolean`
+```js
+deleteTask(id);   // → true if removed; false if id not found
 ```
-
-### 5.4 `GET /api/v1/tasks/:id`
-
-- `200` → full Task object.
-- `404` when the id doesn't exist **or** belongs to another user:
-  ```json
-  { "error": { "code": "NOT_FOUND", "message": "Task not found" } }
-  ```
-- Malformed non-numeric id → `400` (`Invalid task id`).
-
-### 5.5 `PATCH /api/v1/tasks/:id`
-
-Request (any subset of mutable fields):
-```json
-{ "title": "Buy groceries and cook dinner", "description": "Milk, eggs, pasta, and tomatoes" }
-```
-```json
-{ "status": "DONE" }
-```
-Behavior:
-- All provided fields validated (§4); a single invalid field rejects the **entire** update (`422`) and no column is modified.
-- Setting `status: "DONE"` sets `completed_at`; reverting clears it (§3.3).
-- Only whitelisted fields are accepted — attempts to change `id`, `owner_id`, `created_at` are ignored (or `422`).
-- Success → `200` with the full updated Task.
-- Not found → `404 Task not found`.
-
-### 5.6 `DELETE /api/v1/tasks/:id`
-- `204 No Content` on success (body empty).
-- `404` when not found/not owned.
-- Idempotency note: a second delete of a deleted id returns `404`, matching the `@delete @notfound` contract.
-
-### 5.7 Error envelope (uniform)
-
-```json
-{ "error": { "code": "<MACHINE_CODE>", "message": "<HUMAN MESSAGE>", "fields": { "<field>": "<message>" } } }
-```
-
-| HTTP | `code` | When |
-|---|---|---|
-| `400` | `BAD_REQUEST` | Malformed JSON, non-numeric id, invalid enum in query |
-| `401` | `UNAUTHORIZED` | Missing/expired/invalid auth token |
-| `404` | `NOT_FOUND` | Task does not exist or is not owned by caller |
-| `422` | `VALIDATION_ERROR` | Business validation failure (V1–V6) |
-| `500` | `INTERNAL_ERROR` | Unexpected server failure |
+- Only called after the user confirms in the modal (§6.4); cancelling never calls it.
+- Removes the task, persists, shows: **Task deleted successfully**.
+- Deleting a non-existent id (stale state) → *"Task not found"* and no change.
 
 ---
 
 ## 6. UI Specification
 
-### 6.1 Views
-| View | Route | Contents |
+### 6.1 Layout (single `index.html`)
+One page with three switchable sections:
+
+| Section | Trigger | Contents |
 |---|---|---|
-| Task list ("My Tasks" dashboard) | `/` or `/tasks` | Task rows/cards (title, status badge, priority badge, due date), status filter control, "New Task" button |
-| Task detail | `/tasks/:id` | Full task fields, "Edit" and "Delete" buttons |
-| Task create/edit form | `/tasks/new`, `/tasks/:id/edit` | Fields: title (required), description (textarea), status, priority, due date; "Save" button |
+| **Task list** ("My Tasks" dashboard) | App start; after save/cancel | Header, "New Task" button, status filter, task cards/rows (title, status badge, priority badge, due date), empty-state text |
+| **Task detail** | Clicking a task in the list (or hash URL) | All task fields, "Edit" and "Delete" buttons, "Back to list" link |
+| **Create / edit form** | "New Task" or "Edit" | Fields: title (required), description (textarea), status, priority, due date; "Save" and "Cancel" buttons |
 
 ### 6.2 Task list behavior
-- Sorted by `created_at` descending — **newest task appears first**.
-- Status filter control (`To Do` / `In Progress` / `Done` / All) refetches with `?status=...`; only matching tasks render.
-- Newly created tasks appear immediately (refetch or optimistic insert).
+- Sorted by `createdAt` descending — **most recently created task appears first**.
+- Status filter shows only matching tasks; selecting "Done" hides "To Do"/"In Progress" tasks.
+- Newly created tasks appear at the top immediately after save.
+- Empty state: *"No tasks yet — create one to get started."*
 
-### 6.3 Feedback messages (exact strings from feature file)
+### 6.3 Feedback messages (exact strings from the feature file)
 | Trigger | Message | Presentation |
 |---|---|---|
-| Successful create | `Task created successfully` | Success toast/flash, auto-dismiss ≥3 s |
-| Successful update | `Task updated successfully` | Success toast/flash |
-| Successful delete | `Task deleted successfully` | Success toast/flash |
-| Validation failure | `Title is required` (or field-specific) | Inline error under the field **and** form-level alert; form remains populated |
+| Successful create | `Task created successfully` | Toast/flash, auto-dismiss after ~3 s |
+| Successful update | `Task updated successfully` | Toast/flash |
+| Successful delete | `Task deleted successfully` | Toast/flash |
+| Validation failure | `Title is required` (or field-specific) | Inline error under the field + form alert; form keeps all entered values |
 
 ### 6.4 Delete confirmation flow
-1. User clicks **Delete** on the task detail page.
-2. Modal dialog: "Are you sure you want to delete this task?" with **Confirm** and **Cancel**.
-3. **Confirm** → `DELETE /tasks/:id` → on `204`, navigate to task list, show `Task deleted successfully`; list count decrements.
-4. **Cancel** → modal closes, **no API call**, task remains intact.
+1. User clicks **Delete** on the detail view.
+2. Modal: *"Are you sure you want to delete this task?"* with **Confirm** and **Cancel** buttons (native `<dialog>` or a custom overlay).
+3. **Confirm** → `deleteTask(id)` → return to list, show `Task deleted successfully`.
+4. **Cancel** → modal closes, nothing is called or changed.
 
 ### 6.5 Form validation UX
-- Save submits to the API; on `422`, the `fields` map drives inline errors and **no navigation occurs** — the form keeps all entered values and the persisted record is unchanged.
-- Client may pre-validate required title before submit for responsiveness, but server response is authoritative.
+- On submit: trim inputs → validate via `model.js`.
+- Invalid → show inline errors (e.g. *"Title is required"* under the title input), keep all entered values, do not persist.
+- Valid → persist → show success toast → return to list.
+
+### 6.6 Not-found handling
+- Direct/stale URL such as `#/tasks/9999` → detail section shows **"Task not found"** with a link back to the list (matches all `@notfound` scenarios).
 
 ---
 
-## 7. Security & Authorization
+## 7. Accessibility & Responsiveness
 
-- All `/tasks` endpoints require authentication (`401` otherwise).
-- Every query is scoped by `owner_id = current_user.id`; cross-user access returns `404`, never `403` (no resource enumeration).
-- Input is parameterized (no string-concatenated SQL); all writes wrapped in transactions.
-- Passwords stored as argon2/bcrypt hashes; tokens carry `user_id` + expiry; recommend 12 h access token / refresh rotation.
-- Standard headers: `Content-Type`, rate limiting on auth endpoints, body size cap (e.g. 64 KB).
+- Semantic HTML: `<main>`, `<section>`, `<form>`, `<label for=…>`, real `<button>` elements.
+- Keyboard operable: Tab order follows the flow; Enter submits the form; Escape closes the delete modal; focus moves to the modal on open and returns on close.
+- Modal uses `role="dialog" aria-modal="true"` with `aria-labelledby`; errors linked to inputs via `aria-describedby` and `aria-invalid`.
+- Status/priority conveyed by text labels (not color alone).
+- Mobile-first CSS: single-column layout, filter and buttons wrap; touch targets ≥ 44 px.
 
 ---
 
@@ -306,12 +255,14 @@ Behavior:
 
 | Area | Requirement |
 |---|---|
-| Performance | List `GET /tasks` p95 < 200 ms for 10,000 tasks per user (via index §3.1); mutations p95 < 100 ms |
-| Concurrency | Last-write-wins on `PATCH`; each mutation is a single atomic transaction |
-| Data integrity | Referential integrity enforced by FKs; orphan tasks impossible |
-| Auditability | `created_at` / `updated_at` / `completed_at` maintained on every write |
-| Availability | CRUD API stateless → horizontally scalable behind a load balancer |
-| Compatibility | Feature file is the acceptance baseline; any behavior change requires updating `taskadmin.feature` first |
+| Dependencies | Zero — plain HTML/CSS/JS, no npm packages, no build step |
+| Performance | Instant interactions; 1,000+ tasks render without noticeable lag (virtualize or paginate if needed) |
+| Data size | Comfortably handles the `localStorage` ~5 MB budget; JSON payload per task is small |
+| Integrity | Full-array atomic writes (§3.2) — a failed save leaves previous data intact |
+| Portability | Runs from `file://` or any static host; no server required |
+| Browser support | Modern evergreen browsers (Chrome, Firefox, Edge, Safari) |
+| Data lifecycle | Data persists per browser/origin; a "Clear all tasks" action resets the store |
+| Compatibility | `taskadmin.feature` is the acceptance baseline; behavior changes update the feature file first |
 
 ---
 
@@ -319,12 +270,12 @@ Behavior:
 
 | Level | Tool | Coverage target |
 |---|---|---|
-| Unit | Vitest | Validators (§4), status state machine (§3.3), service-layer rules |
-| API integration | Vitest + Supertest (in-memory/temp SQLite) | Every endpoint × success, validation failure, 404 |
-| E2E / acceptance | Playwright + Gherkin runner | Execute **all 15 scenarios** in `taskadmin.feature` on each release branch |
-| Contract | Schema snapshots of §5 responses | Catch accidental response-shape drift |
+| Unit | Vitest (or Node's built-in test runner) with a `localStorage` mock | `model.js` validators (V1–V7), status/`completedAt` side effects, ordering |
+| Storage | Same, with mocked `localStorage` | `storage.js` round-trips, quota-error handling |
+| E2E / acceptance | Playwright against `index.html` | Execute **all 15 scenarios** in `taskadmin.feature` (clicks, form fills, modal, filter, toasts) |
+| Manual | Checklist per release | Toast strings, inline errors, keyboard flow, `file://` loading |
 
-Fixtures mirror the feature file's data tables (e.g., the three seed tasks used by the view/filter scenarios).
+Fixtures mirror the feature file's data tables (the three seed tasks used by the view/filter scenarios).
 
 ---
 
@@ -332,21 +283,21 @@ Fixtures mirror the feature file's data tables (e.g., the three seed tasks used 
 
 | # | Scenario (feature file) | Tag(s) | Design elements |
 |---|---|---|---|
-| 1 | Create a new task with a title and description | `@create` | §3.1, §5.2, §6.1, message "Task created successfully" §6.3 |
-| 2 | Create a new task with only a required title | `@create` | Defaults `description=NULL`, `priority=MEDIUM` (§3.1, §5.2) |
-| 3 | Create a task without a title is rejected | `@create @validation` | V1, `422` envelope, inline error (§4, §5.7, §6.5) |
-| 4 | View an existing task's details | `@view` | `GET /tasks/:id` §5.4, detail view §6.1, enum labels §3.4 |
-| 5 | View the list sorted by creation date | `@view` | `created_at DESC` ordering §5.3, §6.2 |
-| 6 | Filter tasks by status | `@view @filter` | `?status=` query param §5.3, filter control §6.2 |
-| 7 | View a task that does not exist | `@view @notfound` | 404 envelope `Task not found` §5.4, §5.7 |
-| 8 | Update an existing task's title and description | `@update` | `PATCH /tasks/:id` §5.5, message "Task updated successfully" §6.3 |
-| 9 | Change a task's status to done | `@update` | Status state machine + `completed_at` §3.3, §5.5 |
-| 10 | Update a task with an empty title is rejected | `@update @validation` | V1, all-or-nothing transaction §4, §5.5, §6.5 |
-| 11 | Update a task that does not exist | `@update @notfound` | 404 §5.5, no-write guarantee §4 |
-| 12 | Delete an existing task | `@delete` | `DELETE /tasks/:id` §5.6, confirm flow §6.4, message §6.3 |
-| 13 | Cancel deleting a task | `@delete @cancel` | Modal cancel → no API call §6.4 |
-| 14 | Delete a task that does not exist | `@delete @notfound` | 404 §5.6, §5.7 |
-| 15 | Complete task lifecycle create → update → delete | `@lifecycle` | Full stack: §5.2 → §5.5 (status ×2) → §5.6, empty-list assertion §5.3 |
+| 1 | Create a new task with a title and description | `@create` | §3.1, §5.1, form §6.1, toast "Task created successfully" §6.3 |
+| 2 | Create a new task with only a required title | `@create` | Defaults `description: ""`, `priority: "Medium"`, `status: "To Do"` (§3.1, §5.1) |
+| 3 | Create a task without a title is rejected | `@create @validation` | V1, inline error, no write (§4, §6.5) |
+| 4 | View an existing task's details | `@view` | `getTask(id)` §5.2, detail view §6.1 |
+| 5 | View the list sorted by creation date | `@view` | `createdAt DESC` ordering §5.2, §6.2 |
+| 6 | Filter tasks by status | `@view @filter` | `filterByStatus` §5.2, filter control §6.2 |
+| 7 | View a task that does not exist | `@view @notfound` | "Task not found" state §4 V7, §6.6 |
+| 8 | Update an existing task's title and description | `@update` | `updateTask` §5.3, toast "Task updated successfully" §6.3 |
+| 9 | Change a task's status to done | `@update` | State machine + `completedAt` §3.3, §5.3 |
+| 10 | Update a task with an empty title is rejected | `@update @validation` | V1, all-or-nothing save, original values intact (§4, §5.3) |
+| 11 | Update a task that does not exist | `@update @notfound` | `NotFoundError` §5.3, no-write guarantee §4 |
+| 12 | Delete an existing task | `@delete` | `deleteTask` §5.4, confirm modal §6.4, toast §6.3 |
+| 13 | Cancel deleting a task | `@delete @cancel` | Modal cancel → no call, data intact §6.4 |
+| 14 | Delete a task that does not exist | `@delete @notfound` | Not-found path §5.4, §6.6 |
+| 15 | Complete task lifecycle create → update → delete | `@lifecycle` | Full flow: §5.1 → §5.3 (status ×2) → §5.4, empty list §6.2 |
 
 ---
 
@@ -354,16 +305,16 @@ Fixtures mirror the feature file's data tables (e.g., the three seed tasks used 
 
 | Phase | Deliverable |
 |---|---|
-| M1 — Foundation | DB schema + migrations (§3), auth middleware (§7), seed fixtures |
-| M2 — CRUD API | All five endpoints (§5) with validation (§4) + integration tests |
-| M3 — UI | List, detail, form views (§6), toasts, delete modal |
-| M4 — Acceptance | Gherkin E2E suite green against `taskadmin.feature`; performance checks (§8) |
+| M1 — Foundation | `index.html` skeleton, `styles.css` theme, `model.js` + `storage.js` with unit tests |
+| M2 — CRUD | Create, list, detail, edit, delete flows wired in `app.js`; toasts and inline validation |
+| M3 — Polish | Filter, delete modal, not-found state, accessibility pass, mobile layout |
+| M4 — Acceptance | E2E suite green against `taskadmin.feature`; seed/demo data and "clear data" helper |
 
 ---
 
 ## 12. Open Questions
 
-1. Should task titles be unique **per user** despite the feature file allowing duplicates? (Current design: duplicates allowed.)
-2. Pagination vs. infinite scroll for the task list — spec assumes offset pagination (§5.3).
-3. Should the `completed_at` timestamp be user-visible in the UI detail view? (Currently stored, not surfaced in §6.)
-4. Offline/optimistic updates — deferred to a later iteration.
+1. Hash-based routing (`#/tasks/:id`) vs. purely in-memory view state? (Affects deep links and the `@notfound` scenario only.)
+2. Should duplicate titles be prevented per the UI even though the spec currently allows them?
+3. Seed demo data on first run, or start empty? (Scenario 15 starts from an empty store.)
+4. "Clear all data" button — useful for demos, but easy to mis-click; include or not?
