@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Tasks — Task Management</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <!-- ===== Task list ("My Tasks" dashboard) ===== -->
+    <section id="list-view" class="view" aria-labelledby="list-heading">
+      <header class="view-header">
+        <h1 id="list-heading">My Tasks</h1>
+        <button id="new-task-btn" class="btn btn-primary" type="button">New Task</button>
+      </header>
+
+      <div class="filter-row">
+        <label for="status-filter">Filter by status</label>
+        <select id="status-filter">
+          <option value="All">All</option>
+          <option value="To Do">To Do</option>
+          <option value="In Progress">In Progress</option>
+          <option value="Done">Done</option>
+        </select>
+      </div>
+
+      <ul id="task-list" class="task-list" aria-live="polite"></ul>
+      <p id="empty-state" class="empty-state" hidden>No tasks yet — create one to get started.</p>
+      <p id="empty-filter" class="empty-state" hidden>No tasks match this filter.</p>
+    </section>
+
+    <!-- ===== Task detail ===== -->
+    <section id="detail-view" class="view" hidden aria-labelledby="detail-title">
+      <button id="detail-back-btn" class="btn btn-ghost" type="button">&larr; Back to list</button>
+      <article class="detail-card">
+        <h1 id="detail-title"></h1>
+        <p id="detail-description" class="detail-description"></p>
+        <dl class="detail-meta">
+          <div><dt>Status</dt><dd><span id="detail-status" class="badge"></span></dd></div>
+          <div><dt>Priority</dt><dd><span id="detail-priority" class="badge"></span></dd></div>
+          <div><dt>Due date</dt><dd id="detail-due">—</dd></div>
+          <div id="detail-completed-row" hidden><dt>Completed</dt><dd id="detail-completed"></dd></div>
+        </dl>
+        <div class="actions">
+          <button id="detail-edit-btn" class="btn" type="button">Edit</button>
+          <button id="detail-delete-btn" class="btn btn-danger" type="button">Delete</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- ===== Create / edit form ===== -->
+    <section id="form-view" class="view" hidden aria-labelledby="form-heading">
+      <h1 id="form-heading">New Task</h1>
+      <form id="task-form" novalidate>
+        <p id="form-alert" class="form-alert" role="alert" hidden></p>
+
+        <div class="field">
+          <label for="title">Title <span class="req" aria-hidden="true">*</span></label>
+          <input id="title" name="title" type="text" maxlength="200" autocomplete="off" />
+          <p id="title-error" class="field-error" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="description">Description</label>
+          <textarea id="description" name="description" rows="4" maxlength="5000"></textarea>
+          <p id="description-error" class="field-error" hidden></p>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="status">Status</label>
+            <select id="status" name="status">
+              <option>To Do</option>
+              <option>In Progress</option>
+              <option>Done</option>
+            </select>
+            <p id="status-error" class="field-error" hidden></p>
+          </div>
+          <div class="field">
+            <label for="priority">Priority</label>
+            <select id="priority" name="priority">
+              <option>Low</option>
+              <option selected>Medium</option>
+              <option>High</option>
+            </select>
+            <p id="priority-error" class="field-error" hidden></p>
+          </div>
+          <div class="field">
+            <label for="dueDate">Due date</label>
+            <input id="dueDate" name="dueDate" type="date" />
+            <p id="dueDate-error" class="field-error" hidden></p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">Save</button>
+          <button id="form-cancel-btn" class="btn" type="button">Cancel</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ===== Not found ===== -->
+    <section id="notfound-view" class="view" hidden aria-labelledby="notfound-heading">
+      <h1 id="notfound-heading">Task not found</h1>
+      <p>The task you requested does not exist.</p>
+      <a class="btn btn-primary" href="#/">Back to list</a>
+    </section>
+  </main>
+
+  <!-- ===== Delete confirmation modal ===== -->
+  <dialog id="delete-dialog" aria-labelledby="delete-dialog-title">
+    <form method="dialog">
+      <h2 id="delete-dialog-title">Are you sure you want to delete this task?</h2>
+      <p id="delete-dialog-task" class="dialog-task-name"></p>
+      <div class="actions">
+        <button id="confirm-delete-btn" class="btn btn-danger" value="confirm" type="submit">Confirm</button>
+        <button id="cancel-delete-btn" class="btn" value="cancel" type="submit" autofocus>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ===== Toast ===== -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
