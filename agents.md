@@ -4,16 +4,43 @@ Environment reference for AI agents working in this repository.
 
 ## Project Description
 
-**Task Management CRUD** — a task/to-do management application exposing the four core CRUD operations over tasks.
+**Task Management CRUD** — a simple, fully client-side task/to-do web app. No backend, no API, no build step, no npm dependencies, no tests.
 
-- **Purpose:** let authenticated users organize personal work by creating, viewing, updating, and deleting tasks.
-- **Core entities:** a *Task* with `title` (required), `description`, `status` (`To Do`, `In Progress`, `Done`), `priority` (`Low`, `Medium`, `High`), `due date`, and timestamps.
-- **Core behaviors:**
-  - **Create** — new task via form; title is mandatory, description optional, priority defaults to `Medium`, status defaults to `To Do`.
-  - **View** — list tasks (newest first) with status filtering, plus a task detail page; missing tasks return 404.
-  - **Update** — edit title/description, change status and priority; empty title is rejected and changes are not applied.
-  - **Delete** — remove a task after user confirmation; cancelling keeps it; deleting a missing task returns 404.
-- **Specifications:** behavior is documented in Gherkin under `specs/` (e.g. `specs/start/taskadmin.feature`), tagged by operation (`@create`, `@view`, `@update`, `@delete`) and cross-cutting concerns (`@validation`, `@notfound`).
+- **Stack:** plain HTML5 + CSS3 + vanilla JavaScript (ES modules), persistence via `localStorage`. Runs directly from `file://` or any static host.
+- **Source layout:**
+  - `index.html` — single page (list / detail / form sections switched by JS)
+  - `styles.css` — all styling, CSS variables for theming
+  - `js/app.js` — entry point: state, view switching, event wiring
+  - `js/model.js` — Task factory, validation, enum helpers
+  - `js/storage.js` — **only** module that touches `localStorage` (key `tasks` → `JSON.stringify(Task[])`, full-array atomic writes)
+  - `js/views.js` — DOM rendering
+
+### Task model (stored as display labels — no mapping layer)
+
+| Field | Notes |
+|---|---|
+| `id` | `crypto.randomUUID()` |
+| `title` | **required**, non-empty after trim, ≤200 chars |
+| `description` | optional, default `""` |
+| `status` | `"To Do"` \| `"In Progress"` \| `"Done"`, default `"To Do"` |
+| `priority` | `"Low"` \| `"Medium"` \| `"High"`, default `"Medium"` |
+| `dueDate` | ISO `YYYY-MM-DD`, optional |
+| `completedAt` | set when status becomes `"Done"`, cleared when it leaves |
+| `createdAt` / `updatedAt` | ISO timestamps; list sorted by `createdAt` **newest first** |
+
+### Rules agents must preserve
+
+- Validation failure (e.g. empty title → exact message `Title is required`) performs **no write** — stored data and original field values stay intact.
+- Unknown id (e.g. `#/tasks/9999`) → show **"Task not found"**; never crash.
+- Duplicate titles are allowed.
+- Delete requires a confirmation modal; **Cancel must not call `deleteTask`**.
+- Success toasts use exact strings: `Task created successfully`, `Task updated successfully`, `Task deleted successfully`.
+- All CRUD goes through module functions (`addTask`, `loadTasks`, `filterByStatus`, `getTask`, `updateTask`, `deleteTask`) — never touch `localStorage` directly outside `storage.js`.
+
+### Documentation
+
+- `specs/start/taskadmin.feature` — Gherkin behavior spec (15 scenarios; tags `@create`, `@view`, `@update`, `@delete`, `@validation`, `@notfound`, `@filter`, `@cancel`, `@lifecycle`).
+- `specs/start/spec.md` — technical specification (architecture, data model, validation, module contracts, UI spec, traceability matrix). Keep behavior changes in sync with both files.
 
 ## Operating System
 
@@ -44,7 +71,7 @@ Environment reference for AI agents working in this repository.
 
 ## Version Control
 
-- **Repository:** this directory is a Git repository (initialized here), no commits yet; current branch `feature/task-management-crud` (branched from `main` for the Task Management CRUD work)
+- **Repository:** this directory is a Git repository (initialized here); current branch `feature/taskadmin-technical-spec`; branches: `main`, `feature/task-management-crud` (feature spec + project doc), `feature/taskadmin-technical-spec` (technical spec)
 - **Git identity (local to this repo):**
   - `user.name` = `maxac89`
   - `user.email` = `max89or@gmail.com`
