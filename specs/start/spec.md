@@ -148,7 +148,7 @@ Validation lives in `model.js` and runs on form submit (client-side only — the
 **Key invariants (from the feature file):**
 - A rejected create/update performs **no write** — the stored array is unchanged and the original title (and all fields) remain intact.
 - A "Task not found" state is shown whenever a requested id doesn't exist (e.g. stale hash URL like `#/tasks/9999`).
-- Duplicate titles are **allowed** (preconditions like "user has no task named X" are test setup, not business rules).
+- Duplicate titles are **allowed** (preconditions like "user has no task named X" are setup state, not business rules).
 
 ---
 
@@ -266,20 +266,7 @@ One page with three switchable sections:
 
 ---
 
-## 9. Testing Strategy
-
-| Level | Tool | Coverage target |
-|---|---|---|
-| Unit | Vitest (or Node's built-in test runner) with a `localStorage` mock | `model.js` validators (V1–V7), status/`completedAt` side effects, ordering |
-| Storage | Same, with mocked `localStorage` | `storage.js` round-trips, quota-error handling |
-| E2E / acceptance | Playwright against `index.html` | Execute **all 15 scenarios** in `taskadmin.feature` (clicks, form fills, modal, filter, toasts) |
-| Manual | Checklist per release | Toast strings, inline errors, keyboard flow, `file://` loading |
-
-Fixtures mirror the feature file's data tables (the three seed tasks used by the view/filter scenarios).
-
----
-
-## 10. Traceability Matrix — Feature Scenario → Design Elements
+## 9. Traceability Matrix — Feature Scenario → Design Elements
 
 | # | Scenario (feature file) | Tag(s) | Design elements |
 |---|---|---|---|
@@ -301,18 +288,18 @@ Fixtures mirror the feature file's data tables (the three seed tasks used by the
 
 ---
 
-## 11. Milestones
+## 10. Milestones
 
 | Phase | Deliverable |
 |---|---|
-| M1 — Foundation | `index.html` skeleton, `styles.css` theme, `model.js` + `storage.js` with unit tests |
+| M1 — Foundation | `index.html` skeleton, `styles.css` theme, `model.js` + `storage.js` |
 | M2 — CRUD | Create, list, detail, edit, delete flows wired in `app.js`; toasts and inline validation |
 | M3 — Polish | Filter, delete modal, not-found state, accessibility pass, mobile layout |
 | M4 — Acceptance | E2E suite green against `taskadmin.feature`; seed/demo data and "clear data" helper |
 
 ---
 
-## 12. Open Questions
+## 11. Open Questions
 
 1. Hash-based routing (`#/tasks/:id`) vs. purely in-memory view state? (Affects deep links and the `@notfound` scenario only.)
 2. Should duplicate titles be prevented per the UI even though the spec currently allows them?
